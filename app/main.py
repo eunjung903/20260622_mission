@@ -82,7 +82,7 @@ async def api_generate_report(body: GenerateReportRequest):
 @app.post("/api/send-email", response_model=SendEmailResponse)
 async def api_send_email(body: SendEmailRequest):
     try:
-        message = send_report_email(body.email, body.keyword, body.report)
+        message = await send_report_email(body.email, body.keyword, body.report)
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:

@@ -1,32 +1,56 @@
 import os
 import re
 import smtplib
-from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
+
+import httpx
 
 from app.config import get_settings
 
-OUTPUT_DIR = (
-    Path("/tmp/emails")
-    if os.environ.get("VERCEL")
-    else Path(__file__).resolve().parent.parent.parent / "output" / "emails"
-)
 
-
-def send_report_email(to_email: str, keyword: str, report: str) -> str:
-    """생성된 보고서를 이메일로 발송합니다. SMTP 미설정 시 로컬 파일로 저장합니다."""
+async def send_report_email(to_email: str, keyword: str, report: str) -> str:
+    """생성된 보고서를 이메일로 발송합니다."""
     settings = get_settings()
 
-    if all([settings.smtp_user, settings.smtp_password, settings.email_from]):
-        _send_via_smtp(to_email, keyword, report, settings)
+    if settings.resend_api_key:
+        await _send_via_resend(to_email, keyword, report, settings)
         return "발송이 완료되었습니다"
 
-    return _save_to_file(to_email, keyword, report)
+    if all([settings.smtp_user, settings.smtp_password, settings.email_from]):
+        await _send_via_smtp(to_email, keyword, report, settings)
+        return "발송이 완료되었습니다"
+
+    await _send_via_formsubmit(to_email, keyword, report)
+    return "발송이 완료되었습니다"
 
 
-def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> None:
+async def _send_via_resend(to_email: str, keyword: str, report: str, settings) -> None:
+    html_body = _markdown_to_html(report)
+    sender = settings.email_from or "AI 뉴스 리포터 <onboarding@resend.dev>"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {settings.resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": sender,
+                "to": [to_email],
+                "subject": f"[AI 뉴스 리포터] '{keyword}' 보고서",
+                "html": html_body,
+                "text": report,
+            },
+        )
+
+    if response.status_code >= 400:
+        detail = response.text[:200]
+        raise ValueError(f"Resend 이메일 발송 실패: {detail}")
+
+
+async def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> None:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[AI 뉴스 리포터] '{keyword}' 보고서"
     msg["From"] = settings.email_from
@@ -36,11 +60,16 @@ def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> None:
     msg.attach(MIMEText(report, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    try:
+    def _send() -> None:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
             server.starttls()
             server.login(settings.smtp_user, settings.smtp_password)
             server.send_message(msg)
+
+    try:
+        import asyncio
+
+        await asyncio.to_thread(_send)
     except smtplib.SMTPAuthenticationError as exc:
         raise ValueError(
             "SMTP 인증에 실패했습니다. Gmail은 앱 비밀번호 사용이 필요합니다."
@@ -49,22 +78,50 @@ def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> None:
         raise ValueError(f"이메일 발송 실패: {exc}") from exc
 
 
-def _save_to_file(to_email: str, keyword: str, report: str) -> str:
-    """SMTP 미설정 시 보고서를 로컬 파일로 저장합니다."""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_keyword = re.sub(r'[^\w가-힣-]', '_', keyword)[:30]
-    filename = OUTPUT_DIR / f"{timestamp}_{safe_keyword}.txt"
+async def _send_via_formsubmit(to_email: str, keyword: str, report: str) -> None:
+    """FormSubmit HTTP API로 실제 이메일을 발송합니다 (API 키 불필요)."""
+    import os
 
-    content = (
-        f"수신: {to_email}\n"
-        f"제목: [AI 뉴스 리포터] '{keyword}' 보고서\n"
-        f"발송 시각: {datetime.now().isoformat()}\n"
-        f"{'=' * 50}\n\n"
-        f"{report}\n"
-    )
-    filename.write_text(content, encoding="utf-8")
-    return "발송이 완료되었습니다"
+    html_body = _markdown_to_html(report)
+    site_url = os.environ.get("VERCEL_URL", "20260622mission.vercel.app")
+    if not site_url.startswith("http"):
+        site_url = f"https://{site_url}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"https://formsubmit.co/ajax/{to_email}",
+            headers={
+                "Accept": "application/json",
+                "Origin": site_url,
+                "Referer": f"{site_url}/",
+            },
+            json={
+                "_subject": f"[AI 뉴스 리포터] '{keyword}' 보고서",
+                "_captcha": "false",
+                "_template": "box",
+                "message": report,
+                "html_report": html_body,
+            },
+        )
+
+    if response.status_code >= 400:
+        raise ValueError(f"이메일 발송 실패 (HTTP {response.status_code})")
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ValueError("이메일 발송 응답을 확인할 수 없습니다.") from exc
+
+    if str(data.get("success", "")).lower() == "true":
+        return
+
+    message = data.get("message", "")
+    if "activat" in message.lower():
+        raise ValueError(
+            "처음 사용하는 이메일입니다. 수신함에서 FormSubmit 활성화 링크를 "
+            "클릭한 후 다시 [발송]을 눌러 주세요."
+        )
+    raise ValueError(message or "이메일 발송에 실패했습니다.")
 
 
 def _markdown_to_html(markdown: str) -> str:
