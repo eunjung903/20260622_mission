@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 뉴스 리포터</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">📰</div>
+      <h1>AI 뉴스 리포터</h1>
+      <p class="subtitle">키워드를 입력하면 Gemini가 최근 2일간의 뉴스를 검색·분석해 보고서를 생성합니다</p>
+    </header>
+
+    <section class="card search-section">
+      <label for="keyword">검색 키워드</label>
+      <div class="input-row">
+        <input
+          type="text"
+          id="keyword"
+          placeholder="예: 인공지능, 반도체, 기후변화..."
+          autocomplete="off"
+        >
+        <button id="generateBtn" class="btn btn-primary">
+          <span class="btn-text">보고서 생성</span>
+          <span class="spinner hidden"></span>
+        </button>
+      </div>
+    </section>
+
+    <div id="status" class="status hidden"></div>
+
+    <section id="reportSection" class="card report-section hidden">
+      <div class="report-header">
+        <h2 id="reportTitle">보고서</h2>
+        <span id="articleCount" class="badge"></span>
+      </div>
+      <div id="reportContent" class="report-content"></div>
+    </section>
+
+    <section id="emailSection" class="card email-section hidden">
+      <h2>보고서 이메일 발송</h2>
+      <div class="input-row">
+        <input
+          type="email"
+          id="email"
+          placeholder="수신 이메일 주소"
+          autocomplete="email"
+        >
+        <button id="sendBtn" class="btn btn-secondary">
+          <span class="btn-text">발송</span>
+          <span class="spinner hidden"></span>
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
