@@ -1,3 +1,4 @@
+import os
 import re
 import smtplib
 from datetime import datetime
@@ -7,7 +8,11 @@ from pathlib import Path
 
 from app.config import get_settings
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "output" / "emails"
+OUTPUT_DIR = (
+    Path("/tmp/emails")
+    if os.environ.get("VERCEL")
+    else Path(__file__).resolve().parent.parent.parent / "output" / "emails"
+)
 
 
 def send_report_email(to_email: str, keyword: str, report: str) -> str:
