@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
+    brevo_api_key: str = ""
     resend_api_key: str = ""
     email_from: str = ""
 

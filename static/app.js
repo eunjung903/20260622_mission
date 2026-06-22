@@ -30,6 +30,42 @@ function setLoading(button, loading) {
   spinner.classList.toggle("hidden", !loading);
 }
 
+async function sendEmailViaFormSubmit(email, keyword, report) {
+  const response = await fetch(`https://formsubmit.co/ajax/${encodeURIComponent(email)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      _subject: `[AI 뉴스 리포터] '${keyword}' 보고서`,
+      _captcha: "false",
+      message: report,
+    }),
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("이메일 발송 응답을 확인할 수 없습니다.");
+  }
+
+  if (String(data.success).toLowerCase() === "true") {
+    return "발송이 완료되었습니다";
+  }
+
+  const message = data.message || "";
+  if (message.toLowerCase().includes("activat")) {
+    return (
+      "활성화 링크를 이메일로 보냈습니다. 수신함에서 'Activate Form' 링크를 " +
+      "클릭한 후 다시 [발송]을 눌러 주세요."
+    );
+  }
+
+  throw new Error(message || "이메일 발송에 실패했습니다.");
+}
+
 generateBtn.addEventListener("click", async () => {
   const keyword = keywordInput.value.trim();
   if (!keyword) {
@@ -91,24 +127,29 @@ sendBtn.addEventListener("click", async () => {
   try {
     showStatus("이메일을 발송하고 있습니다...", "info");
 
-    const response = await fetch("/api/send-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        keyword: currentKeyword,
-        report: currentReport,
-      }),
-    });
+    let message;
+    try {
+      message = await sendEmailViaFormSubmit(email, currentKeyword, currentReport);
+    } catch (clientError) {
+      const response = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          keyword: currentKeyword,
+          report: currentReport,
+        }),
+      });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.detail || "이메일 발송에 실패했습니다.");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || clientError.message || "이메일 발송에 실패했습니다.");
+      }
+      message = data.message;
     }
 
-    alert("발송이 완료되었습니다");
-    showStatus(data.message, "success");
+    alert(message);
+    showStatus(message, message.includes("활성화") ? "info" : "success");
   } catch (err) {
     showStatus(err.message, "error");
   } finally {

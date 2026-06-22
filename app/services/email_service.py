@@ -1,4 +1,3 @@
-import os
 import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -13,6 +12,10 @@ async def send_report_email(to_email: str, keyword: str, report: str) -> str:
     """생성된 보고서를 이메일로 발송합니다."""
     settings = get_settings()
 
+    if settings.brevo_api_key and settings.email_from:
+        await _send_via_brevo(to_email, keyword, report, settings)
+        return "발송이 완료되었습니다"
+
     if settings.resend_api_key:
         await _send_via_resend(to_email, keyword, report, settings)
         return "발송이 완료되었습니다"
@@ -21,8 +24,35 @@ async def send_report_email(to_email: str, keyword: str, report: str) -> str:
         await _send_via_smtp(to_email, keyword, report, settings)
         return "발송이 완료되었습니다"
 
-    await _send_via_formsubmit(to_email, keyword, report)
+    status, message = await _send_via_formsubmit(to_email, keyword, report)
+    if status == "activation":
+        return message
     return "발송이 완료되었습니다"
+
+
+async def _send_via_brevo(to_email: str, keyword: str, report: str, settings) -> None:
+    html_body = _markdown_to_html(report)
+    name, email = _parse_sender(settings.email_from)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": settings.brevo_api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={
+                "sender": {"name": name, "email": email},
+                "to": [{"email": to_email}],
+                "subject": f"[AI 뉴스 리포터] '{keyword}' 보고서",
+                "htmlContent": html_body,
+                "textContent": report,
+            },
+        )
+
+    if response.status_code >= 400:
+        raise ValueError(f"이메일 발송 실패: {response.text[:200]}")
 
 
 async def _send_via_resend(to_email: str, keyword: str, report: str, settings) -> None:
@@ -46,8 +76,7 @@ async def _send_via_resend(to_email: str, keyword: str, report: str, settings) -
         )
 
     if response.status_code >= 400:
-        detail = response.text[:200]
-        raise ValueError(f"Resend 이메일 발송 실패: {detail}")
+        raise ValueError(f"Resend 이메일 발송 실패: {response.text[:200]}")
 
 
 async def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> None:
@@ -78,29 +107,18 @@ async def _send_via_smtp(to_email: str, keyword: str, report: str, settings) -> 
         raise ValueError(f"이메일 발송 실패: {exc}") from exc
 
 
-async def _send_via_formsubmit(to_email: str, keyword: str, report: str) -> None:
-    """FormSubmit HTTP API로 실제 이메일을 발송합니다 (API 키 불필요)."""
-    import os
-
-    html_body = _markdown_to_html(report)
-    site_url = os.environ.get("VERCEL_URL", "20260622mission.vercel.app")
-    if not site_url.startswith("http"):
-        site_url = f"https://{site_url}"
-
+async def _send_via_formsubmit(
+    to_email: str, keyword: str, report: str
+) -> tuple[str, str]:
+    """FormSubmit HTTP API로 이메일을 발송합니다."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"https://formsubmit.co/ajax/{to_email}",
-            headers={
-                "Accept": "application/json",
-                "Origin": site_url,
-                "Referer": f"{site_url}/",
-            },
-            json={
+            headers={"Accept": "application/json"},
+            data={
                 "_subject": f"[AI 뉴스 리포터] '{keyword}' 보고서",
                 "_captcha": "false",
-                "_template": "box",
                 "message": report,
-                "html_report": html_body,
             },
         )
 
@@ -113,15 +131,24 @@ async def _send_via_formsubmit(to_email: str, keyword: str, report: str) -> None
         raise ValueError("이메일 발송 응답을 확인할 수 없습니다.") from exc
 
     if str(data.get("success", "")).lower() == "true":
-        return
+        return "sent", "발송이 완료되었습니다"
 
     message = data.get("message", "")
     if "activat" in message.lower():
-        raise ValueError(
-            "처음 사용하는 이메일입니다. 수신함에서 FormSubmit 활성화 링크를 "
-            "클릭한 후 다시 [발송]을 눌러 주세요."
+        return (
+            "activation",
+            "활성화 링크를 이메일로 보냈습니다. 수신함에서 'Activate Form' 링크를 "
+            "클릭한 후 다시 [발송]을 눌러 주세요.",
         )
+
     raise ValueError(message or "이메일 발송에 실패했습니다.")
+
+
+def _parse_sender(sender: str) -> tuple[str, str]:
+    match = re.match(r"^(.*?)<([^>]+)>$", sender.strip())
+    if match:
+        return match.group(1).strip() or "AI 뉴스 리포터", match.group(2).strip()
+    return "AI 뉴스 리포터", sender.strip()
 
 
 def _markdown_to_html(markdown: str) -> str:
